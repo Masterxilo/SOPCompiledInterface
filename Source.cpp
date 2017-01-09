@@ -46,34 +46,6 @@ Test.
 */
 
 
-// Standard headers
-
-#include <sal.h>  // c.f. sal.txt
-
-#define _USE_MATH_DEFINES
-#include <math.h>
-#include <float.h>
-#include <limits.h>
-#include <stdio.h>
-#include <memory.h> // just memset, but not malloc/free (no (standard) new/delete either
-#include <string.h>
-
-#include <iostream>
-
-#include <unordered_map>
-#include <type_traits> // syntax hacks
-#include <vector>
-#include <functional>
-#include <algorithm>
-using namespace std;
-
-#define NOMINMAX
-#define WINDOWS_LEAN_AND_MEAN
-#include <windows.h> // OutputDebugStringA, DebugBreak
-
-
-#pragma warning(push,4)
-
 // paul.h
 #include <paul.h>
 
@@ -111,29 +83,6 @@ using namespace std;
 
 
 
-
-
-
-// Better assert
-
-
-#pragma warning(disable : 4003) // assert does not need "commentFormat" and its arguments
-#undef assert
-#if GPU_CODE
-// #include <assert.h>
-#define assert(x,commentFormat,...) {if(!(x)) {if (!assertionThrowException) printf("%s(%i) : Assertion failed : %s.\n\tblockIdx %d %d %d, threadIdx %d %d %d\n\t<" commentFormat ">\n", __FILE__, __LINE__, #x, xyz(blockIdx), xyz(threadIdx), __VA_ARGS__); assertionFailed = true; if (breakOnAssertion) *(int*)0 = 0;/* asm("trap;"); illegal instruction*/} }
-#else
-
-#define assert(x,commentFormat,...) {if(!(x)) {char s[10000]; sprintf_s(s, "%s(%i) : Assertion failed : %s.\n\t<" commentFormat ">\n", __FILE__, __LINE__, #x, __VA_ARGS__); /*notify on all channels*/ {puts(s);MessageBoxA(0,s,"Assertion failed",0);OutputDebugStringA(s);} /*flushStd();*/  DebugBreak();  }}
-#endif
-
-// assert(false) - wrapper
-#define FATAL_ERROR false // make assertion more readable
-#define fatalError(commentFormat, ...) \
-    __pragma(warning(push))\
-    __pragma(warning(disable:4127)) /*Conditional Expression is Constant in assert(false)*/\
-    assert(FATAL_ERROR, "Fatal Error: " commentFormat, __VA_ARGS__); \
-    __pragma(warning(pop))
 
 
 
@@ -200,33 +149,12 @@ using namespace std;
 
 
 
-// FOR with const iterating variable
-// for (int i = 0; i < 10; i++) i+=10; is legal but bad
-// FOR(int,i,0,10) i+=10; is illegal
 
-// create a block executed once with decl in place, prefix version of {decl; ...}
-// e.g. BLOCK_DECLARE(const auto var = 1)
-#define BLOCK_DECLARE(decl) if (bool a__ = true) for (decl;a__;a__=false)
 
-#define FOR(type, var, start, maxExclusive, inc) for (type var##_ = (start); var##_ < (maxExclusive); var##_ += (inc)) BLOCK_DECLARE(const type var = var##_)
 
-#define FOR1(type, var, start, maxExclusive) FOR(type, var, start, maxExclusive, 1)
-#define FOR01(type, var, maxExclusive) FOR(type, var, 0, maxExclusive, 1) // any reason not to use size_t (unsigned int) here?
-#define FOR01S(var, maxExclusive) FOR(unsigned int, var, 0, maxExclusive, 1)
 
-// Like Mathematica's Do[..., {var, max}], but starts at 0 and goes to maxExclusive-1
-// var is const within the loop body and is of unspecified integral type.
-#define DO(var, maxExclusive) FOR01S(var, maxExclusive) MAKE_CONST(var) /* TODO extra MAKE_CONST not needed here, is it?*/
-#define REPEAT(times) DO(__i /*use uncommon/implementation reserved variable to avoid conflicts*/, (times)) \
-    __pragma(warning(push))\
-    __pragma(warning(disable:4127)) /*Conditional Expression is Constant*/\
-    if (false) DBG_UNREFERENCED_LOCAL_VARIABLE(__i); else /* get rid of unreferenced variable */\
-    __pragma(warning(pop))
 
-#define FOREACH(var, arr, arsz) DO(i, arsz) BLOCK_DECLARE(auto& var = arr[i])
-#define FOREACHC(var, arr, arsz) DO(i, arsz) BLOCK_DECLARE(auto const & var = arr[i]) 
 
-#define MAKE_CONST(var) BLOCK_DECLARE(auto var##_ = var) BLOCK_DECLARE(const auto var = var##_)
 
 
 
@@ -251,108 +179,6 @@ using namespace std;
 
 
 
-
-
-// Testing framework
-// Note: CANNOT USE std::vector to track all listed tests (not yet initialized?)
-// this ad-hoc implementation works
-const int max_tests = 10000;
-int _ntests = 0;
-typedef void(*Test)(void);
-Test _tests[max_tests] = {0};
-const char* _test_names[max_tests] = {0};
-
-void addTest(const char*const n, void f(void)) {
-    assert(_ntests < max_tests);
-    _test_names[_ntests] = n;
-    _tests[_ntests++] = f;
-}
-
-#define TESTMSGPREFIX() "======================== "
-
-void runTests() {
-    for (int i = 0; i < _ntests; i++) {
-        cout << TESTMSGPREFIX() << "Test " << i + 1 << "/" << _ntests << ": " << _test_names[i] << endl;
-        _tests[i]();
-    }
-    cout << TESTMSGPREFIX() << "all tests passed" << endl;
-}
-
-#define TEST(name) void Test##name(); struct T##name {T##name() {addTest(#name,Test##name);}} _T##name; void Test##name() 
-
-
-
-
-
-
-
-
-
-
-
-
-/*
-
-Paul's CUDA/C agnostic framework begins
-
-FUNCTION declared functions can be called from Mathematica and CUDA whenever possible.
-
-CPU_FUNCTION and CUDA_FUNCTION denote functions that use features only available on either platform (e.g. dues to CUDA API limitations or extensions)
-
-Only primitive types can be passed back and forth automatically as of now.
-
-*/
-
-// Most global data, can be queries via State
-#ifdef __CUDACC__
-#define GLOBAL(type, name, defaultValue, usage) __managed__ type name = defaultValue
-#define GLOBALDYNAMICARRAY(elementtype, name, sizevar, usage)  __managed__ int sizevar = 0; /*lengths are int because that's what WSTP expects -- it doesn't seem to support larger arrays (at least not sent at once) -- should be size_t*/ __managed__ elementtype* name = 0;
-
-#define GLOBALDYNAMICARRAY_SHAREDLENGTH(elementtype, name, sizevar, usage) __managed__ elementtype* name = 0; // TODO would be nice if it was detected that the variable already exists
-#else
-#define GLOBAL(type, name, defaultValue, usage) type name = defaultValue
-#define GLOBALDYNAMICARRAY(elementtype, name, sizevar, usage)  int sizevar = 0; /*lengths are int because that's what WSTP expects -- it doesn't seem to support larger arrays (at least not sent at once) -- should be size_t*/ elementtype* name = 0;
-
-#define GLOBALDYNAMICARRAY_SHAREDLENGTH(elementtype, name, sizevar, usage) elementtype* name = 0; // TODO would be nice if it was detected that the variable already exists
-
-#endif
-
-// Read-only global data
-#ifdef __CUDA_ARCH__
-#define CONSTANTD const __constant__ 
-#else
-#define CONSTANTD const 
-#endif
-
-#ifdef __CUDA_ARCH__
-#define CONSTANT(type, name, value, usage) const __constant__ type name = value
-#else
-#define CONSTANT(type, name, value, usage) const type name = value
-#endif
-
-// declarative, CUDA agnostic definition of functions
-// use only for arguments of types that compile for CUDA (i.e. not std:: types)
-// usage intended for automatic extraction by tools and for runtime availability (inspection)
-#ifdef __CUDACC__
-#define FUNCTION(ret, name, args, usage) /** usage */ __host__ __device__ ret name args
-#define MEMBERFUNCTION(ret, name, args, usage) /** usage */ __host__ __device__ ret name args // memberfunctions are not straightforward to call from mathematica/from outside, so special declaration
-#else
-#define FUNCTION(ret, name, args, usage) /** usage */ ret name args
-#define MEMBERFUNCTION(ret, name, args, usage) /** usage */ ret name args
-#endif
-
-
-// Special:
-
-// Denotes a function that uses GPU features (threadIdx, __shared__)
-//#define CUDA_FUNCTION(ret, name, args) __device__ ret name args // threadIdx is defined as 1 for CPU functions, __shared__ is ignored
-
-// Alternative declaration for CPU only functions
-// shows that this function doesn't work on CUDA for one reason or other (e.g. using std types)
-// Prefer this for new functions
-// TODO support template parameters
-// can call CUDAKERNEL_LAUNCH
-#define CPU_FUNCTION(ret, name, args, usage) ret name args
 
 
 
@@ -622,19 +448,6 @@ unsigned int cs_x_used_entries(const cs *A) {
 #define MEMPOOL char*& memoryPool, /*using int to detect over-deallocation */ int& memory_size // the function taking these modifies memoryPool to point to the remaining free memory
 #define MEMPOOLPARAM memoryPool, memory_size 
 
-TEST(divisible1) {
-    assert(divisible(8u, 8u));
-    assert(divisible(8, 8));
-    assert(!divisible(7, 8));
-    assert(divisible(8000000, 8));
-    assert(!divisible(28, 8));
-}
-
-TEST(aligned1) {
-    assert(aligned((void*)0x4, 4u));
-    assert(!aligned((void*)0x8, 6u));
-    assert(aligned((void*)0x8, 8u));
-}
 
 FUNCTION(char*, cs_malloc_, (MEMPOOL, unsigned int sz /* use unsigned int?*/),
     "allocate new stuff. can only allocate multiples of 8 bytes to preserve alignment of pointers in cs. Use nextEven to round up when allocating 4 byte stuff (e.g. int)"){
